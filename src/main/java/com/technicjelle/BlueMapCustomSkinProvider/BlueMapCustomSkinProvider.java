@@ -1,159 +1,162 @@
 package com.technicjelle.BlueMapCustomSkinProvider;
 
-import com.jayway.jsonpath.JsonPath;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.technicjelle.BMUtils.BMNative.BMNLogger;
 import com.technicjelle.BMUtils.BMNative.BMNMetadata;
-import com.technicjelle.UpdateChecker;
+import com.technicjelle.BlueMapCustomSkinProvider.service.BlessingSkinService;
+import com.technicjelle.BlueMapCustomSkinProvider.service.MultiLoginService;
 import de.bluecolored.bluemap.api.BlueMapAPI;
 import de.bluecolored.bluemap.api.plugin.SkinProvider;
-import de.bluecolored.bluemap.common.api.BlueMapAPIImpl;
-import de.bluecolored.bluemap.common.api.PluginImpl;
-import de.bluecolored.bluemap.common.plugin.Plugin;
-import de.bluecolored.bluemap.common.serverinterface.Player;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.net.*;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.function.Consumer;
+import javax.imageio.ImageIO;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.net.URLConnection;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
-import java.util.function.Consumer;
-
+/**
+ * @author MochaMousse
+ */
 public final class BlueMapCustomSkinProvider implements Runnable {
-	private BMNLogger logger;
-	private UpdateChecker updateChecker;
-	private @Nullable Config config;
+  private static final String DEFAULT_TEXTURE =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAdVBMVEUAAAArHg0zJBGBUzk/KhV2SzOQWT+PXj5JJRAkGAibY0mzeV63g2uqclk0JRL///9SPYlqQDCUYD53QjVCHQomGgo6MYk3NzcoKCgAzMwAr68ApKQKvLxBNZtGOqUElZUAf38FiIgAaGgDenpKSko/Pz9VVVUam28fAAAAAXRSTlMAQObYZgAAAv5JREFUWMPtlu12mzAMhstHneDMa7tmkEIJcdrs/i9x7yvZLbC0OPmzs50KAjInepBkY+nmJkiW5TjzrAhyc6lkeYmTgFvINQAY8zC3IuYKDxAAftcDMg3CaAiXA3LmMCvLwjCFZnU5oJQY8lWhxxU5yJnHrFitIUW6BzL5Fa8lBAQMGA6XBbQs4c34Y5XnFQk5j6rSRVXyeZkUu6wgu/m2cfa7jEtOKMl5vuwBPcY7rdtsnHNWrDQMCSQlBCw/W7m7e2fv71xljTzKKwEtA/imykKce3iAB5BK/EcqmI5FQJVVxq6KH2a1fnzcQilW1uAhAVkKoDCwJ6HYrreYf4OBNVyOPyGJX2UNaZrdLo6fHBDWPdVB4vO2bTuE6s4CdrumeQPAHoSzAKTJLHvwEeCZgBQPPgihkxBmHvR93e/3+xq3Hko9QPAeTGvXqt7hClMYd7gdIBy8A+p3AO77wfuhbQfneBUdlu2bfXs4Hg9QxwAx7CPAv7z4Dia8UCeBrFbMu0EAGJwH4HyBRCPqjBt6dwhyhPA+ATAMEpgwGuHtBPgAGCR51hoeIhhMPeBJCH5028NdAkII4hC/VByYA342o6mMsb/lwEvmOrzWR51DsQJCADhH0zgFMPOebnP6oAugCwAnADPxoBbDPiaiH2DjB8nbIJrM3+DFf/3cp4DX17jeXkUGMRskjxRaw947BTjdOkaA5gSrXzQ9UT3pZMAfDzMqiAjKXgFWAXYMaJoTDU+NaE1Y0pgW7zUvYOHKCdAcGkEk7RNf8t/JswrXdddC+dv+fMk/IPNiy5rE7egiwLjcE2DsmbKe7sFze7YvuMCDzqTug9ov9LFa99oPaGmf9AWfAcRS+4a9lvNAGPcFnwHqUO8jYAjGhKR7QAC02A9EiftB3B/+BMz6Be0HtJywLi57oDVWWxborEWhNXBJUzkJARIagtgdpAE0idovmNiShPK8CJDKLCtBYzGxnttEwLxfiPYxCYuAeb8Q+4GYhmXArF/QGWT6tD+Y//837Wp+wZH/YdMAAAAASUVORK5CYII=";
+  public static BMNLogger logger;
+  public static Config config;
+  private final Map<String, String> uuidNameMap = new HashMap<>();
+  private final Consumer<BlueMapAPI> blueMapOnEnableListener =
+      api -> {
+        try {
+          logger.logInfo("加载配置文件");
+          config = Config.load(api);
+        } catch (IOException e) {
+          config = null;
+          logger.logError("无法加载配置文件");
+          throw new UncheckedIOException(e);
+        }
+        try {
+          logger.logInfo("加载数据源");
+          Datasource.init(
+              Datasource.AUTH_DATASOURCE,
+              config.getDriverClassName(),
+              config.getAuthDatabaseUrl(),
+              config.getAuthDatabaseUsername(),
+              config.getAuthDatabasePassword());
+          Datasource.init(
+              Datasource.SKIN_DATASOURCE,
+              config.getDriverClassName(),
+              config.getSkinDatabaseUrl(),
+              config.getSkinDatabaseUsername(),
+              config.getSkinDatabasePassword());
+        } catch (SQLException e) {
+          logger.logError("无法加载数据源", e);
+        }
+        logger.logInfo("设置皮肤加载规则");
+        SkinProvider customSkinProvider =
+            uuid -> {
+              BufferedImage image = getTextureFromLocal(uuid.toString());
+              if (image == null) {
+                image = getTextureFromRemote(uuid.toString());
+              }
+              if (image == null) {
+                try (ByteArrayInputStream byteArrayInputStream =
+                    new ByteArrayInputStream(Base64.getDecoder().decode(DEFAULT_TEXTURE))) {
+                  image = ImageIO.read(byteArrayInputStream);
+                  logger.logInfo(String.format("为玩家%s加载默认材质", uuidNameMap.get(uuid.toString())));
+                } catch (IOException e) {
+                  throw new UncheckedIOException(e);
+                }
+              }
+              return Optional.ofNullable(image);
+            };
+        api.getPlugin().setSkinProvider(customSkinProvider);
+      };
 
-	private boolean isCLI = false;
-	private final Set<HashedPlayer> allPlayers = new HashSet<>();
+  /**
+   * Downloads an image from the given URL.
+   *
+   * @param link URL of the image
+   * @return The image, or <code>null</code> if it could not be found, or the link was invalid
+   */
+  private static @Nullable BufferedImage downloadImage(@NotNull String link) {
+    final @NotNull URL url;
+    try {
+      url = new URI(link).toURL();
+    } catch (MalformedURLException | URISyntaxException e) {
+      return null;
+    }
+    try (InputStream in = url.openStream()) {
+      return ImageIO.read(in);
+    } catch (IOException e) {
+      return null;
+    }
+  }
 
-	@Override
-	public void run() {
-		String addonID;
-		String addonVersion;
-		try {
-			addonID = BMNMetadata.getAddonID(this.getClass().getClassLoader());
-			addonVersion = BMNMetadata.getKey(this.getClass().getClassLoader(), "version");
-			logger = new BMNLogger(this.getClass().getClassLoader());
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-		logger.logInfo("Starting " + addonID + " " + addonVersion);
-		updateChecker = new UpdateChecker("TechnicJelle", addonID, addonVersion);
-		updateChecker.checkAsync();
-		BlueMapAPI.onEnable(blueMapOnEnableListener);
-	}
+  private BufferedImage getTextureFromLocal(String uuid) {
+    String username;
+    if (uuidNameMap.containsKey(uuid)) {
+      username = uuidNameMap.get(uuid);
+    } else {
+      username = MultiLoginService.getUsernameByUuid(uuid);
+      uuidNameMap.put(uuid, username);
+    }
+    String fileName = BlessingSkinService.getTextureFileNameByName(username);
+    if (fileName != null && config.getFilePath() != null) {
+      try {
+        String path = config.getFilePath().concat("/").concat(fileName);
+        logger.logInfo(String.format("从%s获取玩家%s材质", path, username));
+        return ImageIO.read(new File(path));
+      } catch (IOException e) {
+        logger.logError(String.format("无法从本地获取玩家%s材质", username), e);
+      }
+    }
+    return null;
+  }
 
-	private final Consumer<BlueMapAPI> blueMapOnEnableListener = api -> {
-		updateChecker.getUpdateMessage().ifPresent(logger::logWarning);
+  private BufferedImage getTextureFromRemote(String uuid) {
+    BufferedImage image = null;
+    try {
+      URL profileUrl =
+          new URI(Objects.requireNonNull(config.getRemoteUrl()).replace("{UUID}", uuid)).toURL();
+      URLConnection request = profileUrl.openConnection();
+      request.connect();
+      Gson gson = new Gson();
+      Profile profile =
+          gson.fromJson(new String(request.getInputStream().readAllBytes()), Profile.class);
+      String textures = null;
+      for (Profile.Property property : profile.getProperties()) {
+        if ("textures".equals(property.getName())) {
+          textures = property.getValue();
+          break;
+        }
+      }
+      JsonObject jsonObject =
+          gson.fromJson(new String(Base64.getDecoder().decode(textures)), JsonObject.class);
+      String textureUrl =
+          jsonObject.getAsJsonObject("textures").getAsJsonObject("SKIN").get("url").getAsString();
+      image = downloadImage(textureUrl);
+      logger.logInfo(String.format("从%s获取玩家%s材质", jsonObject, uuidNameMap.get(uuid)));
+    } catch (Exception e) {
+      logger.logError(String.format("从远程获取玩家%s材质", uuidNameMap.get(uuid)), e);
+    }
+    return image;
+  }
 
-		if (((BlueMapAPIImpl) api).plugin() == null) {
-			isCLI = true;
-			throw new UnsupportedOperationException("Running on the CLI mode is not supported yet in BlueMap!");
-			//TODO: Hopefully I can take this out in the future
-			// Once the BlueMap CLI can take a SkinProvider...
-			// Useful for integration with BMOPM
-		}
-
-		try {
-			config = Config.load(api);
-		} catch (IOException e) {
-			config = null;
-			throw new RuntimeException(e);
-		}
-
-		String url = config.getUrl();
-		if (url == null) {
-			throw new RuntimeException("No skin URL provided in the config file!");
-		}
-
-		SkinProvider customSkinProvider = playerUUID -> {
-			if (!isCLI) {
-				//BlueMap is attached to a server, so we remember all players from there
-				Plugin plugin = ((PluginImpl) api.getPlugin()).getPlugin();
-				Collection<Player> players = plugin.getServerInterface().getOnlinePlayers();
-				for (Player player : players) allPlayers.add(new HashedPlayer(player));
-			}
-
-			String uuid = playerUUID.toString();
-			String username = url.contains("{USERNAME}") ? getUsername(playerUUID) : uuid; //Do not make the potentially expensive API call if not needed
-			String localUrl = url
-					.replace("{UUID}", uuid)
-					.replace("{USERNAME}", username)
-					.replace("{UUID-}", uuid.replace("-", ""));
-			logger.logDebug("Downloading skin for " + username + " from " + localUrl);
-			BufferedImage img = downloadImage(localUrl);
-			return Optional.ofNullable(img);
-		};
-
-		api.getPlugin().setSkinProvider(customSkinProvider);
-	};
-
-	private String getUsername(UUID uuid) {
-		if (!isCLI) {
-			//BlueMap is attached to a server, so we can get the username from the remembered players
-			Optional<String> serverName = allPlayers.stream()
-					.filter(player -> player.player().getUuid().equals(uuid))
-					.findFirst()
-					.map(hashedPlayer -> hashedPlayer.player().getName().toPlainString());
-			if (serverName.isPresent()) return serverName.get();
-		}
-
-		if (config == null) throw new RuntimeException("Config is null in getUsername??? Please report this bug!");
-
-		String playerUUID = uuid.toString();
-		String usernameURL = config.getUsernameURL();
-		String jsonPath = config.getJsonPath();
-		if (usernameURL == null || usernameURL.isBlank() || jsonPath == null || jsonPath.isBlank()) return playerUUID;
-
-		String localUrl = usernameURL
-				.replace("{UUID}", playerUUID)
-				.replace("{UUID-}", playerUUID.replace("-", ""));
-
-		try {
-			URL url = new URI(localUrl).toURL();
-			try {
-				URLConnection request = url.openConnection();
-				request.connect();
-				String jsonContent = new String(request.getInputStream().readAllBytes());
-				return JsonPath.read(jsonContent, jsonPath);
-			} catch (IOException e) {
-				logger.logError("Failed to get username from " + localUrl + ": " + e.getMessage());
-			}
-		} catch (MalformedURLException | URISyntaxException e) {
-			logger.logError("Invalid URL: " + localUrl);
-		}
-
-		return playerUUID;
-	}
-
-	/**
-	 * Downloads an image from the given URL.
-	 *
-	 * @param link URL of the image
-	 * @return The image, or <code>null</code> if it could not be found, or the link was invalid
-	 */
-	private static @Nullable BufferedImage downloadImage(@NotNull String link) {
-		final @NotNull URL url;
-		try {
-			url = new URI(link).toURL();
-		} catch (MalformedURLException | URISyntaxException e) {
-			return null;
-		}
-		try (InputStream in = url.openStream()) {
-			return ImageIO.read(in);
-		} catch (IOException e) {
-			return null;
-		}
-	}
+  @Override
+  public void run() {
+    String addonId;
+    String addonVersion;
+    try {
+      addonId = BMNMetadata.getAddonID(this.getClass().getClassLoader());
+      addonVersion = BMNMetadata.getKey(this.getClass().getClassLoader(), "version");
+      logger = new BMNLogger(this.getClass().getClassLoader());
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    logger.logInfo("Starting " + addonId + " " + addonVersion);
+    BlueMapAPI.onEnable(blueMapOnEnableListener);
+  }
 }
